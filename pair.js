@@ -12,15 +12,16 @@ const {
 
 const router = express.Router();
 
-function removeFile(FilePath) {
-  if (!fs.existsSync(FilePath)) return false;
-  fs.rmSync(FilePath, { recursive: true, force: true });
-};
+function removeFile(path) {
+  if (fs.existsSync(path)) fs.rmSync(path, { recursive: true, force: true });
+}
 
 router.get('/', async (req, res) => {
   const id = makeid();
   let num = req.query.number;
   if (!num) return res.status(400).json({ error: "Number is required" });
+
+  num = num.replace(/\D/g, ''); // Keep only digits
 
   const { state, saveCreds } = await useMultiFileAuthState(`./temp/${id}`);
 
@@ -36,28 +37,26 @@ router.get('/', async (req, res) => {
     });
 
     if (!sock.authState.creds.registered) {
-      num = num.replace(/[^0-9]/g, '');
       const code = await sock.requestPairingCode(num);
-      if (!res.headersSent) {
-        return res.json({ code });
-      }
+      console.log("Pairing Code:", code);
+      if (!res.headersSent) return res.json({ code });
     }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
+    sock.ev.on("connection.update", async ({ connection }) => {
       if (connection === "open") {
         await delay(3000);
         const data = fs.readFileSync(`./temp/${id}/creds.json`);
         const session = Buffer.from(data).toString('base64');
-        const user = sock.user.id;
+
+        const user = sock.user?.id;
+        if (!user) return;
 
         const sessionMsg = await sock.sendMessage(user, { text: session });
 
         const msg = `
 _Pair Code Connected by WASI TECH_
-
----
 
 ╔════◇
 ║ 『 WOW YOU'VE CHOSEN Hans Pair Code 』
@@ -80,9 +79,7 @@ Don't Forget To Give Star To My Repo`;
   } catch (err) {
     console.error("Pairing failed:", err);
     removeFile(`./temp/${id}`);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Pairing Failed" });
-    }
+    if (!res.headersSent) res.status(500).json({ error: "Pairing Failed" });
   }
 });
 
