@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
   let num = req.query.number;
   if (!num) return res.status(400).json({ error: "Number is required" });
 
-  num = num.replace(/\D/g, ''); // Keep only digits
+  num = num.replace(/\D/g, '');
 
   const { state, saveCreds } = await useMultiFileAuthState(`./temp/${id}`);
 
@@ -36,26 +36,26 @@ router.get('/', async (req, res) => {
       browser: [Browsers.macOS, 'Desktop', 'Safari']
     });
 
-    if (!sock.authState.creds.registered) {
-      const code = await sock.requestPairingCode(num);
-      console.log("Pairing Code:", code);
-      if (!res.headersSent) return res.json({ code });
-    }
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on("connection.update", async ({ connection }) => {
       if (connection === "open") {
-        await delay(3000);
-        const data = fs.readFileSync(`./temp/${id}/creds.json`);
-        const session = Buffer.from(data).toString('base64');
+        try {
+          const code = await sock.requestPairingCode(num);
+          console.log("Pairing Code:", code);
+          if (!res.headersSent) res.json({ code });
 
-        const user = sock.user?.id;
-        if (!user) return;
+          // Optional: Send session and welcome message after pairing
+          await delay(3000);
+          const data = fs.readFileSync(`./temp/${id}/creds.json`);
+          const session = Buffer.from(data).toString('base64');
 
-        const sessionMsg = await sock.sendMessage(user, { text: session });
+          const user = sock.user?.id;
+          if (!user) return;
 
-        const msg = `
+          const sessionMsg = await sock.sendMessage(user, { text: session });
+
+          const msg = `
 _Pair Code Connected by WASI TECH_
 
 ╔════◇
@@ -69,17 +69,26 @@ _Pair Code Connected by WASI TECH_
 
 Don't Forget To Give Star To My Repo`;
 
-        await sock.sendMessage(user, { text: msg }, { quoted: sessionMsg });
-        await delay(1000);
-        await sock.ws.close();
+          await sock.sendMessage(user, { text: msg }, { quoted: sessionMsg });
+          await delay(1000);
+          await sock.ws.close();
+          removeFile(`./temp/${id}`);
+        } catch (err) {
+          console.error("Pairing code request failed after connection opened:", err);
+          removeFile(`./temp/${id}`);
+          if (!res.headersSent) res.status(500).json({ error: "Pairing Failed" });
+        }
+      } else if (connection === "close") {
+        console.log("Connection closed before pairing.");
+        if (!res.headersSent) res.status(500).json({ error: "Connection Closed" });
         removeFile(`./temp/${id}`);
       }
     });
 
   } catch (err) {
-    console.error("Pairing failed:", err);
+    console.error("Unexpected error:", err);
     removeFile(`./temp/${id}`);
-    if (!res.headersSent) res.status(500).json({ error: "Pairing Failed" });
+    if (!res.headersSent) res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
