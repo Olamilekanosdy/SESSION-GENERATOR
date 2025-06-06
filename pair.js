@@ -36,26 +36,27 @@ router.get('/', async (req, res) => {
       browser: [Browsers.macOS, 'Desktop', 'Safari']
     });
 
+    let pairingCodeSent = false;
+
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on("connection.update", async ({ connection }) => {
-      if (connection === "open") {
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
+      if (connection === "open" && !pairingCodeSent) {
         try {
+          pairingCodeSent = true;
           const code = await sock.requestPairingCode(num);
           console.log("Pairing Code:", code);
           if (!res.headersSent) res.json({ code });
 
-          // Optional: Send session and welcome message after pairing
           await delay(3000);
           const data = fs.readFileSync(`./temp/${id}/creds.json`);
           const session = Buffer.from(data).toString('base64');
 
           const user = sock.user?.id;
-          if (!user) return;
+          if (user) {
+            const sessionMsg = await sock.sendMessage(user, { text: session });
 
-          const sessionMsg = await sock.sendMessage(user, { text: session });
-
-          const msg = `
+            const msg = `
 _Pair Code Connected by WASI TECH_
 
 ╔════◇
@@ -69,18 +70,23 @@ _Pair Code Connected by WASI TECH_
 
 Don't Forget To Give Star To My Repo`;
 
-          await sock.sendMessage(user, { text: msg }, { quoted: sessionMsg });
+            await sock.sendMessage(user, { text: msg }, { quoted: sessionMsg });
+          }
+
           await delay(1000);
           await sock.ws.close();
           removeFile(`./temp/${id}`);
+
         } catch (err) {
-          console.error("Pairing code request failed after connection opened:", err);
+          console.error("Error getting pairing code after connection:", err);
+          if (!res.headersSent) res.status(500).json({ error: "Failed to get code" });
           removeFile(`./temp/${id}`);
-          if (!res.headersSent) res.status(500).json({ error: "Pairing Failed" });
         }
-      } else if (connection === "close") {
+      }
+
+      if (connection === "close" && !pairingCodeSent) {
         console.log("Connection closed before pairing.");
-        if (!res.headersSent) res.status(500).json({ error: "Connection Closed" });
+        if (!res.headersSent) res.status(428).json({ error: "Connection Closed" });
         removeFile(`./temp/${id}`);
       }
     });
